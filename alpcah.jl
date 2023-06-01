@@ -4,13 +4,13 @@ using MIRT
 
 # ALPCAH MAIN WRAPPER FUNCTION
 
-function ALPCAH(Y::Matrix, rank::Int; methodType::Symbol = :fastALPCAH, alpcahIter::Int = 1000, apgdIter::Int = 5, vknown::Bool = false, varfloor::Real=1e-9, λr::Real=1e6, varianceMethod::Symbol=:groupless, v::Vector=ones(3), μ::Real=0.01, ρ::Real=1.0)
+function ALPCAH(Y::Matrix, rank::Int; methodType::Symbol = :ALPCAH_ALTMIN, alpcahIter::Int = 1000, apgdIter::Int = 5, vknown::Bool = false, varfloor::Real=1e-9, λr::Real=1e6, varianceMethod::Symbol=:groupless, v::Vector=ones(3), μ::Real=0.01, ρ::Real=1.0)
     U = 0
-    if methodType === :fastALPCAH
+    if methodType === :ALPCAH_ALTMIN
         if vknown == false
-            U = fastALPCAH_ALTMIN_UNKNOWN(Y, rank; varfloor=varfloor, alpcahIter=alpcahIter, varianceMethod=varianceMethod)
+            U = ALPCAH_UNKNOWN_ALTMIN(Y, rank; varfloor=varfloor, alpcahIter=alpcahIter, varianceMethod=varianceMethod)
         else
-            U = fastALPCAH_ALTMIN_KNOWN(Y, rank, v; alpcahIter=alpcahIter)
+            U = ALPCAH_KNOWN_ALTMIN(Y, rank, v; alpcahIter=alpcahIter)
         end
     end
     if methodType === :ALPCAH_ADMM
@@ -34,7 +34,7 @@ end
 
 # FAST, LOW-MEMORY IMPLEMENTATIONS OF ALPCAH X = LR' MATRIX FACTORIZATION USING ALTMIN
 
-function fastALPCAH_ALTMIN_UNKNOWN(Y::Matrix, rank::Int; varfloor::Real=1e-9, alpcahIter::Int = 10, varianceMethod::Symbol = :groupless)
+function ALPCAH_UNKNOWN_ALTMIN(Y::Matrix, rank::Int; varfloor::Real=1e-9, alpcahIter::Int = 10, varianceMethod::Symbol = :groupless)
     D,N = size(Y)
     v = zeros(N)
     # Krylov-based Lanczos Algorithm
@@ -65,7 +65,7 @@ function fastALPCAH_ALTMIN_UNKNOWN(Y::Matrix, rank::Int; varfloor::Real=1e-9, al
     return U
 end
 
-function fastALPCAH_ALTMIN_KNOWN(Y::Matrix, rank::Int, v::Vector; alpcahIter::Int = 10)
+function ALPCAH_KNOWN_ALTMIN(Y::Matrix, rank::Int, v::Vector; alpcahIter::Int = 10)
     # Krylov-based Lanczos Algorithm
     T = tsvd(Y, rank)
     L = T[1]*Diagonal(sqrt.(T[2]))
@@ -134,9 +134,10 @@ function ALPCAH_UNKNOWN_APGD(Y::Matrix, rank::Int, λr::Real; alpcahIter::Int = 
     Π = Diagonal(Π)
     X = zeros(size(Y)) # weirdly necessary to get lower error
     grad = K -> -1*(Y-K)*Π
-    g_prox = (z,c) -> TSVT(z, c*λr, rank)
+    #alpha = LinRange(0.0, λr, alpcahIter)
     for i=1:alpcahIter
-        # left right updates
+        # apgd
+        g_prox = (z,c) -> TSVT(z, c*λr, rank) # TSVT(z, c*alpha[i], rank)
         X, _ = pogm_restart(X, x -> 0, grad, Lf ; mom=:fpgm, g_prox, niter=apgdIter);
         # variance updates
         if varianceMethod === :groupless
@@ -163,8 +164,12 @@ function ALPCAH_UNKNOWN_ADMM(Y::Matrix, k::Int, λr::Real; μ::Real=0.01, ρ::Re
     Π = Diagonal(var.^-1)
     Λ = sign.(Y)
     Λ = deepcopy(Λ ./ (max(opnorm(Λ), (1/λr)*norm(Λ, Inf))))
+    #alpha = LinRange(0.0, λr, alpcahIter)
+    X = zeros(size(Y))
+    Z = zeros(size(Y))
+    var = ones(length(var))
     for i = 1:alpcahIter
-        X = TSVT(Y-Z+(1/μ)*Λ, λr/μ,k)
+        X = TSVT(Y-Z+(1/μ)*Λ, λr/μ,k) # TSVT(Y-Z+(1/μ)*Λ, λr/μ,k)
         Z = μ*(Y-X+(1/μ)*Λ)*inv(Π+μ*I)
         Λ = Λ + μ*(Y-X-Z)
         var = grouplessVarianceUpdate(Y, X; varfloor=varfloor)
@@ -175,7 +180,7 @@ function ALPCAH_UNKNOWN_ADMM(Y::Matrix, k::Int, λr::Real; μ::Real=0.01, ρ::Re
     return U
 end
 
-function ALPCAH_KNOWN_ADMM(Y::Matrix, k::Int, v::Vector; μ::Real=0.01, ρ::Real=1.0, λr::Real=-1e6 ,alpcahIter::Int = 1000)
+function ALPCAH_KNOWN_ADMM(Y::Matrix, k::Int, v::Vector; μ::Real=0.01, ρ::Real=1.0, λr::Real=1e6 ,alpcahIter::Int = 1000)
     X = zeros(size(Y))
     Z = zeros(size(Y))
     Π = Diagonal(v.^-1)
